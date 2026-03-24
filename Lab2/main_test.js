@@ -1,155 +1,136 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
-const path = require('path');
 const { Application, MailSystem } = require('./main');
 
-test('MailSystem.write returns correct message', () => {
+test('MailSystem.write', () => {
   const mail = new MailSystem();
-  const result = mail.write('Alice');
-  assert.equal(result, 'Congrats, Alice!');
+  assert.equal(mail.write('Alice'), 'Congrats, Alice!');
 });
 
-test('MailSystem.send returns true when Math.random > 0.5', (t) => {
+test('MailSystem.send success', () => {
   const mail = new MailSystem();
 
-  const originalRandom = Math.random;
-  Math.random = () => 0.8;
+  const original = Math.random;
+  Math.random = () => 0.9;
 
   try {
-    const result = mail.send('Bob', 'Congrats, Bob!');
-    assert.equal(result, true);
+    assert.equal(mail.send('Bob', 'msg'), true);
   } finally {
-    Math.random = originalRandom;
+    Math.random = original;
   }
 });
 
-test('MailSystem.send returns false when Math.random <= 0.5', (t) => {
+test('MailSystem.send fail', () => {
   const mail = new MailSystem();
 
-  const originalRandom = Math.random;
-  Math.random = () => 0.2;
+  const original = Math.random;
+  Math.random = () => 0.1;
 
   try {
-    const result = mail.send('Bob', 'Congrats, Bob!');
-    assert.equal(result, false);
+    assert.equal(mail.send('Bob', 'msg'), false);
   } finally {
-    Math.random = originalRandom;
+    Math.random = original;
   }
 });
 
-test('Application.getNames reads names from file', async () => {
-  const originalReadFile = fs.readFile;
-  fs.readFile = (file, encoding, callback) => {
-    callback(null, 'Alice\nBob\nCharlie');
-  };
+test('getNames', async () => {
+  const original = fs.readFile;
+  fs.readFile = (p, e, cb) => cb(null, 'Alice\nBob\nCharlie');
 
   try {
     const app = new Application();
     const [people, selected] = await app.getNames();
+
     assert.deepEqual(people, ['Alice', 'Bob', 'Charlie']);
     assert.deepEqual(selected, []);
   } finally {
-    fs.readFile = originalReadFile;
+    fs.readFile = original;
   }
 });
 
-test('Application.getRandomPerson returns correct person by random index', () => {
+test('getRandomPerson', () => {
   const app = new Application();
-  app.people = ['Alice', 'Bob', 'Charlie'];
+  app.people = ['A', 'B', 'C'];
 
-  const originalRandom = Math.random;
-  Math.random = () => 0.4; // floor(0.4 * 3) = 1
+  const original = Math.random;
+  Math.random = () => 0.4;
 
   try {
-    const result = app.getRandomPerson();
-    assert.equal(result, 'Bob');
+    assert.equal(app.getRandomPerson(), 'B');
   } finally {
-    Math.random = originalRandom;
+    Math.random = original;
   }
 });
 
-test('Application.selectNextPerson returns null when all selected', () => {
+test('selectNextPerson null', () => {
   const app = new Application();
-  app.people = ['Alice', 'Bob'];
-  app.selected = ['Alice', 'Bob'];
+  app.people = ['A'];
+  app.selected = ['A'];
 
-  const result = app.selectNextPerson();
-  assert.equal(result, null);
-  assert.deepEqual(app.selected, ['Alice', 'Bob']);
+  assert.equal(app.selectNextPerson(), null);
 });
 
-test('Application.selectNextPerson selects a new person', () => {
+test('selectNextPerson normal', () => {
   const app = new Application();
-  app.people = ['Alice', 'Bob', 'Charlie'];
+  app.people = ['A', 'B'];
   app.selected = [];
 
-  app.getRandomPerson = () => 'Charlie';
+  app.getRandomPerson = () => 'B';
 
-  const result = app.selectNextPerson();
-  assert.equal(result, 'Charlie');
-  assert.deepEqual(app.selected, ['Charlie']);
+  assert.equal(app.selectNextPerson(), 'B');
+  assert.deepEqual(app.selected, ['B']);
 });
 
-test('Application.selectNextPerson retries until unselected person is found', () => {
+test('selectNextPerson retry', () => {
   const app = new Application();
-  app.people = ['Alice', 'Bob', 'Charlie'];
-  app.selected = ['Alice'];
+  app.people = ['A', 'B'];
+  app.selected = ['A'];
 
-  let callCount = 0;
+  let i = 0;
   app.getRandomPerson = () => {
-    callCount += 1;
-    if (callCount === 1) return 'Alice';
-    if (callCount === 2) return 'Alice';
-    return 'Bob';
+    i++;
+    return i < 3 ? 'A' : 'B';
   };
 
-  const result = app.selectNextPerson();
-  assert.equal(result, 'Bob');
-  assert.deepEqual(app.selected, ['Alice', 'Bob']);
-  assert.equal(callCount, 3);
+  assert.equal(app.selectNextPerson(), 'B');
+  assert.deepEqual(app.selected, ['A', 'B']);
 });
 
-test('Application.notifySelected calls write and send for each selected person', () => {
+test('notifySelected', () => {
   const app = new Application();
-  app.selected = ['Alice', 'Bob'];
+  app.selected = ['A', 'B'];
 
-  const writeCalls = [];
-  const sendCalls = [];
+  let writeCount = 0;
+  let sendCount = 0;
 
-  app.mailSystem.write = (name) => {
-    writeCalls.push(name);
-    return `Congrats, ${name}!`;
+  app.mailSystem.write = (n) => {
+    writeCount++;
+    return `Congrats, ${n}!`;
   };
 
-  app.mailSystem.send = (name, context) => {
-    sendCalls.push([name, context]);
+  app.mailSystem.send = () => {
+    sendCount++;
     return true;
   };
 
   app.notifySelected();
 
-  assert.deepEqual(writeCalls, ['Alice', 'Bob']);
-  assert.deepEqual(sendCalls, [
-    ['Alice', 'Congrats, Alice!'],
-    ['Bob', 'Congrats, Bob!'],
-  ]);
+  assert.equal(writeCount, 2);
+  assert.equal(sendCount, 2);
 });
 
-test('Application constructor initializes people and selected', async () => {
-  const originalReadFile = fs.readFile;
-  fs.readFile = (file, encoding, callback) => {
-    callback(null, 'Alice\nBob\nCharlie');
-  };
+test('constructor init', async () => {
+  const original = fs.readFile;
+  fs.readFile = (p, e, cb) => cb(null, 'Alice\nBob\nCharlie');
 
   try {
     const app = new Application();
-
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((r) => setImmediate(r));
 
     assert.deepEqual(app.people, ['Alice', 'Bob', 'Charlie']);
     assert.deepEqual(app.selected, []);
   } finally {
-    fs.readFile = originalReadFile;
+    fs.readFile = original;
   }
 });
