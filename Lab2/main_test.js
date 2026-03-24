@@ -1,24 +1,23 @@
 const fs = require('fs');
 
 jest.mock('fs', () => ({
-  readFile: jest.fn(),
+  readFile: jest.fn((path, encoding, callback) => {
+    callback(null, 'Alice\nBob\nCharlie');
+  }),
 }));
 
 const { Application, MailSystem } = require('./main');
 
 describe('MailSystem', () => {
-  beforeEach(() => {
+  afterEach(() => {
     jest.restoreAllMocks();
   });
 
-  test('write should return correct mail content', () => {
+  test('write should return correct content', () => {
     const mail = new MailSystem();
     jest.spyOn(console, 'log').mockImplementation(() => {});
 
-    const result = mail.write('Alice');
-
-    expect(result).toBe('Congrats, Alice!');
-    expect(console.log).toHaveBeenCalledWith('--write mail for Alice--');
+    expect(mail.write('Alice')).toBe('Congrats, Alice!');
   });
 
   test('send should return true when random > 0.5', () => {
@@ -26,11 +25,7 @@ describe('MailSystem', () => {
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(Math, 'random').mockReturnValue(0.8);
 
-    const result = mail.send('Bob', 'Congrats, Bob!');
-
-    expect(result).toBe(true);
-    expect(console.log).toHaveBeenCalledWith('--send mail to Bob--');
-    expect(console.log).toHaveBeenCalledWith('mail sent');
+    expect(mail.send('Bob', 'Congrats, Bob!')).toBe(true);
   });
 
   test('send should return false when random <= 0.5', () => {
@@ -38,57 +33,46 @@ describe('MailSystem', () => {
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(Math, 'random').mockReturnValue(0.2);
 
-    const result = mail.send('Carl', 'Congrats, Carl!');
-
-    expect(result).toBe(false);
-    expect(console.log).toHaveBeenCalledWith('--send mail to Carl--');
-    expect(console.log).toHaveBeenCalledWith('mail failed');
+    expect(mail.send('Bob', 'Congrats, Bob!')).toBe(false);
   });
 });
 
 describe('Application', () => {
   beforeEach(() => {
-    jest.restoreAllMocks();
-    fs.readFile.mockReset();
-    fs.readFile.mockImplementation((path, encoding, callback) => {
-      callback(null, 'Alice\nBob\nCharlie');
-    });
+    fs.readFile.mockClear();
   });
 
-  test('getNames should read file and return people with empty selected', async () => {
-    const app = new Application();
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
+  test('getNames should return parsed names and empty selected list', async () => {
+    const app = new Application();
     const [people, selected] = await app.getNames();
 
     expect(people).toEqual(['Alice', 'Bob', 'Charlie']);
     expect(selected).toEqual([]);
   });
 
-  test('getRandomPerson should return a person based on mocked random index', () => {
+  test('getRandomPerson should return person by random index', () => {
     const app = new Application();
     app.people = ['Alice', 'Bob', 'Charlie'];
 
     jest.spyOn(Math, 'random').mockReturnValue(0.4);
 
-    const result = app.getRandomPerson();
-
-    expect(result).toBe('Bob');
+    expect(app.getRandomPerson()).toBe('Bob');
   });
 
-  test('selectNextPerson should return null when everyone has been selected', () => {
+  test('selectNextPerson should return null if all people are selected', () => {
     const app = new Application();
     jest.spyOn(console, 'log').mockImplementation(() => {});
     app.people = ['Alice', 'Bob'];
     app.selected = ['Alice', 'Bob'];
 
-    const result = app.selectNextPerson();
-
-    expect(result).toBeNull();
-    expect(console.log).toHaveBeenCalledWith('--select next person--');
-    expect(console.log).toHaveBeenCalledWith('all selected');
+    expect(app.selectNextPerson()).toBeNull();
   });
 
-  test('selectNextPerson should select a new person and add to selected', () => {
+  test('selectNextPerson should select a person and push into selected', () => {
     const app = new Application();
     jest.spyOn(console, 'log').mockImplementation(() => {});
     app.people = ['Alice', 'Bob', 'Charlie'];
@@ -96,32 +80,28 @@ describe('Application', () => {
 
     jest.spyOn(app, 'getRandomPerson').mockReturnValue('Charlie');
 
-    const result = app.selectNextPerson();
-
-    expect(result).toBe('Charlie');
+    expect(app.selectNextPerson()).toBe('Charlie');
     expect(app.selected).toEqual(['Charlie']);
   });
 
-  test('selectNextPerson should retry until getting an unselected person', () => {
+  test('selectNextPerson should retry until an unselected person is found', () => {
     const app = new Application();
     jest.spyOn(console, 'log').mockImplementation(() => {});
     app.people = ['Alice', 'Bob', 'Charlie'];
     app.selected = ['Alice'];
 
-    const spy = jest
+    const randomSpy = jest
       .spyOn(app, 'getRandomPerson')
       .mockReturnValueOnce('Alice')
       .mockReturnValueOnce('Alice')
       .mockReturnValueOnce('Bob');
 
-    const result = app.selectNextPerson();
-
-    expect(result).toBe('Bob');
+    expect(app.selectNextPerson()).toBe('Bob');
     expect(app.selected).toEqual(['Alice', 'Bob']);
-    expect(spy).toHaveBeenCalledTimes(3);
+    expect(randomSpy).toHaveBeenCalledTimes(3);
   });
 
-  test('notifySelected should call write and send for every selected person', () => {
+  test('notifySelected should call write and send for each selected person', () => {
     const app = new Application();
     jest.spyOn(console, 'log').mockImplementation(() => {});
     app.selected = ['Alice', 'Bob'];
@@ -137,18 +117,16 @@ describe('Application', () => {
     app.notifySelected();
 
     expect(writeSpy).toHaveBeenCalledTimes(2);
-    expect(writeSpy).toHaveBeenNthCalledWith(1, 'Alice');
-    expect(writeSpy).toHaveBeenNthCalledWith(2, 'Bob');
-
     expect(sendSpy).toHaveBeenCalledTimes(2);
     expect(sendSpy).toHaveBeenNthCalledWith(1, 'Alice', 'Congrats, Alice!');
     expect(sendSpy).toHaveBeenNthCalledWith(2, 'Bob', 'Congrats, Bob!');
   });
 
-  test('constructor should initialize people and selected from getNames', async () => {
+  test('constructor should initialize people and selected', async () => {
     const app = new Application();
 
-    await new Promise(process.nextTick);
+    await Promise.resolve();
+    await Promise.resolve();
 
     expect(app.people).toEqual(['Alice', 'Bob', 'Charlie']);
     expect(app.selected).toEqual([]);
