@@ -1,134 +1,155 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
 const fs = require('fs');
-
-jest.mock('fs', () => ({
-  readFile: jest.fn((path, encoding, callback) => {
-    callback(null, 'Alice\nBob\nCharlie');
-  }),
-}));
-
+const path = require('path');
 const { Application, MailSystem } = require('./main');
 
-describe('MailSystem', () => {
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  test('write should return correct content', () => {
-    const mail = new MailSystem();
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-
-    expect(mail.write('Alice')).toBe('Congrats, Alice!');
-  });
-
-  test('send should return true when random > 0.5', () => {
-    const mail = new MailSystem();
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(Math, 'random').mockReturnValue(0.8);
-
-    expect(mail.send('Bob', 'Congrats, Bob!')).toBe(true);
-  });
-
-  test('send should return false when random <= 0.5', () => {
-    const mail = new MailSystem();
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    jest.spyOn(Math, 'random').mockReturnValue(0.2);
-
-    expect(mail.send('Bob', 'Congrats, Bob!')).toBe(false);
-  });
+test('MailSystem.write returns correct message', () => {
+  const mail = new MailSystem();
+  const result = mail.write('Alice');
+  assert.equal(result, 'Congrats, Alice!');
 });
 
-describe('Application', () => {
-  beforeEach(() => {
-    fs.readFile.mockClear();
-  });
+test('MailSystem.send returns true when Math.random > 0.5', (t) => {
+  const mail = new MailSystem();
 
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
+  const originalRandom = Math.random;
+  Math.random = () => 0.8;
 
-  test('getNames should return parsed names and empty selected list', async () => {
+  try {
+    const result = mail.send('Bob', 'Congrats, Bob!');
+    assert.equal(result, true);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test('MailSystem.send returns false when Math.random <= 0.5', (t) => {
+  const mail = new MailSystem();
+
+  const originalRandom = Math.random;
+  Math.random = () => 0.2;
+
+  try {
+    const result = mail.send('Bob', 'Congrats, Bob!');
+    assert.equal(result, false);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test('Application.getNames reads names from file', async () => {
+  const originalReadFile = fs.readFile;
+  fs.readFile = (file, encoding, callback) => {
+    callback(null, 'Alice\nBob\nCharlie');
+  };
+
+  try {
     const app = new Application();
     const [people, selected] = await app.getNames();
+    assert.deepEqual(people, ['Alice', 'Bob', 'Charlie']);
+    assert.deepEqual(selected, []);
+  } finally {
+    fs.readFile = originalReadFile;
+  }
+});
 
-    expect(people).toEqual(['Alice', 'Bob', 'Charlie']);
-    expect(selected).toEqual([]);
-  });
+test('Application.getRandomPerson returns correct person by random index', () => {
+  const app = new Application();
+  app.people = ['Alice', 'Bob', 'Charlie'];
 
-  test('getRandomPerson should return person by random index', () => {
+  const originalRandom = Math.random;
+  Math.random = () => 0.4; // floor(0.4 * 3) = 1
+
+  try {
+    const result = app.getRandomPerson();
+    assert.equal(result, 'Bob');
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test('Application.selectNextPerson returns null when all selected', () => {
+  const app = new Application();
+  app.people = ['Alice', 'Bob'];
+  app.selected = ['Alice', 'Bob'];
+
+  const result = app.selectNextPerson();
+  assert.equal(result, null);
+  assert.deepEqual(app.selected, ['Alice', 'Bob']);
+});
+
+test('Application.selectNextPerson selects a new person', () => {
+  const app = new Application();
+  app.people = ['Alice', 'Bob', 'Charlie'];
+  app.selected = [];
+
+  app.getRandomPerson = () => 'Charlie';
+
+  const result = app.selectNextPerson();
+  assert.equal(result, 'Charlie');
+  assert.deepEqual(app.selected, ['Charlie']);
+});
+
+test('Application.selectNextPerson retries until unselected person is found', () => {
+  const app = new Application();
+  app.people = ['Alice', 'Bob', 'Charlie'];
+  app.selected = ['Alice'];
+
+  let callCount = 0;
+  app.getRandomPerson = () => {
+    callCount += 1;
+    if (callCount === 1) return 'Alice';
+    if (callCount === 2) return 'Alice';
+    return 'Bob';
+  };
+
+  const result = app.selectNextPerson();
+  assert.equal(result, 'Bob');
+  assert.deepEqual(app.selected, ['Alice', 'Bob']);
+  assert.equal(callCount, 3);
+});
+
+test('Application.notifySelected calls write and send for each selected person', () => {
+  const app = new Application();
+  app.selected = ['Alice', 'Bob'];
+
+  const writeCalls = [];
+  const sendCalls = [];
+
+  app.mailSystem.write = (name) => {
+    writeCalls.push(name);
+    return `Congrats, ${name}!`;
+  };
+
+  app.mailSystem.send = (name, context) => {
+    sendCalls.push([name, context]);
+    return true;
+  };
+
+  app.notifySelected();
+
+  assert.deepEqual(writeCalls, ['Alice', 'Bob']);
+  assert.deepEqual(sendCalls, [
+    ['Alice', 'Congrats, Alice!'],
+    ['Bob', 'Congrats, Bob!'],
+  ]);
+});
+
+test('Application constructor initializes people and selected', async () => {
+  const originalReadFile = fs.readFile;
+  fs.readFile = (file, encoding, callback) => {
+    callback(null, 'Alice\nBob\nCharlie');
+  };
+
+  try {
     const app = new Application();
-    app.people = ['Alice', 'Bob', 'Charlie'];
 
-    jest.spyOn(Math, 'random').mockReturnValue(0.4);
+    await new Promise((resolve) => setImmediate(resolve));
 
-    expect(app.getRandomPerson()).toBe('Bob');
-  });
-
-  test('selectNextPerson should return null if all people are selected', () => {
-    const app = new Application();
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    app.people = ['Alice', 'Bob'];
-    app.selected = ['Alice', 'Bob'];
-
-    expect(app.selectNextPerson()).toBeNull();
-  });
-
-  test('selectNextPerson should select a person and push into selected', () => {
-    const app = new Application();
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    app.people = ['Alice', 'Bob', 'Charlie'];
-    app.selected = [];
-
-    jest.spyOn(app, 'getRandomPerson').mockReturnValue('Charlie');
-
-    expect(app.selectNextPerson()).toBe('Charlie');
-    expect(app.selected).toEqual(['Charlie']);
-  });
-
-  test('selectNextPerson should retry until an unselected person is found', () => {
-    const app = new Application();
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    app.people = ['Alice', 'Bob', 'Charlie'];
-    app.selected = ['Alice'];
-
-    const randomSpy = jest
-      .spyOn(app, 'getRandomPerson')
-      .mockReturnValueOnce('Alice')
-      .mockReturnValueOnce('Alice')
-      .mockReturnValueOnce('Bob');
-
-    expect(app.selectNextPerson()).toBe('Bob');
-    expect(app.selected).toEqual(['Alice', 'Bob']);
-    expect(randomSpy).toHaveBeenCalledTimes(3);
-  });
-
-  test('notifySelected should call write and send for each selected person', () => {
-    const app = new Application();
-    jest.spyOn(console, 'log').mockImplementation(() => {});
-    app.selected = ['Alice', 'Bob'];
-
-    const writeSpy = jest
-      .spyOn(app.mailSystem, 'write')
-      .mockImplementation((name) => `Congrats, ${name}!`);
-
-    const sendSpy = jest
-      .spyOn(app.mailSystem, 'send')
-      .mockImplementation(() => true);
-
-    app.notifySelected();
-
-    expect(writeSpy).toHaveBeenCalledTimes(2);
-    expect(sendSpy).toHaveBeenCalledTimes(2);
-    expect(sendSpy).toHaveBeenNthCalledWith(1, 'Alice', 'Congrats, Alice!');
-    expect(sendSpy).toHaveBeenNthCalledWith(2, 'Bob', 'Congrats, Bob!');
-  });
-
-  test('constructor should initialize people and selected', async () => {
-    const app = new Application();
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(app.people).toEqual(['Alice', 'Bob', 'Charlie']);
-    expect(app.selected).toEqual([]);
-  });
+    assert.deepEqual(app.people, ['Alice', 'Bob', 'Charlie']);
+    assert.deepEqual(app.selected, []);
+  } finally {
+    fs.readFile = originalReadFile;
+  }
 });
